@@ -184,6 +184,83 @@ unrecoverable once the upstream record is revised.
   first.
 - Recorded to 0.1 lb, matching what a scale reports.
 
+## Exercises
+
+An exercise is a record, not a string. A bare name has nowhere to carry the
+implement type that the loading convention depends on, and a name accepted on
+the spot splits the 1RM and volume queries at log time, where no later cleanup
+can separate a typo from a genuinely new movement.
+
+### Exercise Record
+
+| Field | Required | Purpose |
+| --- | --- | --- |
+| canonical name | yes | the name written to session files |
+| implement type | yes | `barbell`, `dumbbell`, `machine`, `cable`, `bodyweight`; fixes which loading convention a number follows |
+| aliases | optional | alternate spellings, resolved at parse time |
+
+Muscle group is deliberately absent. It is a lookup over the canonical name, so
+it can be added later and applied retroactively, and query 4 reports volume per
+exercise rather than per muscle group.
+
+Default sets and reps are absent too. Those belong to the template rather than
+to the exercise.
+
+### Storage
+
+A seed list ships with the app and is copied into the vault on first run. From
+then on the vault file is the only source, and the app both reads and writes it.
+
+`index.sqlite` is the wrong home, since it is declared rebuildable and this data
+cannot be rebuilt from anything upstream. A shipped asset merged with vault
+overrides was rejected on the same grounds as any two-source design: it needs a
+merge rule, and a seed refresh on app update would then fight hand edits.
+
+This makes exercises the second kind of authored data in the vault, alongside
+templates. Unlike templates, the app writes it.
+
+```markdown
+---
+schema: 1
+---
+
+| Exercise | Implement | Aliases |
+| --- | --- | --- |
+| Back Squat | barbell | Squat, Barbell Squat |
+| Romanian Deadlift | barbell | RDL |
+| Pull-up | bodyweight | Pullup, Chin-up |
+| Dumbbell Bench Press | dumbbell | DB Bench |
+```
+
+### Adding an Exercise
+
+Free text alone never creates an exercise. Logging a name the vault does not
+hold requires an explicit create step that asks for the implement type.
+
+The friction is the point. It happens once per exercise ever, and log time is
+the only moment the implement type is reliably known.
+
+### Renaming and Merging
+
+A rename adds an alias and never rewrites history. "Squat", "Back Squat", and
+"Barbell Squat" become three aliases of one record, the queries unify, and the
+files keep saying what was written on the day.
+
+Rewriting files was rejected on two counts. It makes the vault disagree with
+what was actually logged, and a mass rewrite through `NSFileCoordinator` is the
+exact operation most likely to produce conflicted copies.
+
+### Unresolved Exercises
+
+A hand edit in Obsidian can introduce a name the vault does not hold. The
+parser ingests the set as written and flags it unresolved.
+
+- An unresolved set is never auto-promoted to a canonical exercise. That
+  reintroduces the split by another route.
+- An unresolved set is never dropped.
+- Unresolved sets count toward no query until mapped, and surface as a count in
+  the UI the way pending flushes already do.
+
 ## File Layout
 
 Split by the cadence of the data. A food entry is a point event that only means
@@ -193,6 +270,7 @@ structure, so it earns its own file.
 ```
 Daily/2026-09-25.md            food, bodyweight, links to sessions
 Lifts/2026-09-25-push-a.md     one workout session, from a template
+Exercises.md                   exercise records, seeded on first run
 ```
 
 Roughly two files per day, about 700 a year. Rejected alternatives:
@@ -328,6 +406,8 @@ Required mitigations:
   window to a few writes per day. See Write Path.
 - The app is the only writer for log files. Obsidian is read-only on them by
   convention. Templates are the exception and are read-only to the app.
+- `Exercises.md` is authored data that the app both reads and writes. It is
+  hand-editable, so a hand-added exercise is expected rather than exceptional.
 - A conflicted copy is detected on the next flush and surfaced to the user for
   manual resolution. The app does not attempt an automatic merge.
 

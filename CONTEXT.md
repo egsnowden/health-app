@@ -45,10 +45,31 @@ _Avoid_: weight per hand, total weight
 Total external load plus the day's morning bodyweight reading. Derived, never
 logged, and only meaningful for bodyweight exercises.
 
+**Exercise record**:
+The stored definition of one movement: canonical name, implement type, and
+aliases. An exercise is a record, never a bare string.
+_Avoid_: exercise entry, movement
+
+**Canonical name**:
+The single name an exercise record is keyed by, and the only spelling written
+to a session file.
+_Avoid_: exercise name, primary name
+
+**Alias**:
+An alternate spelling that resolves to a canonical name at parse time. How a
+rename or a merge is expressed, since history is never rewritten.
+_Avoid_: synonym, variant
+
 **Implement type**:
-A property of a canonical exercise saying how its load is applied (barbell,
-dumbbell, machine, bodyweight). Tells a reader which loading convention a
-number follows.
+A property of an exercise record saying how its load is applied (`barbell`,
+`dumbbell`, `machine`, `cable`, `bodyweight`). Tells a reader which loading
+convention a number follows.
+
+**Unresolved set**:
+A logged set whose exercise name matches no record or alias, which only happens
+via a hand edit. Kept as written, counted toward no query, and surfaced until
+mapped.
+_Avoid_: orphan set, invalid set, bad set
 
 **Volume**:
 Working sets per exercise per week. Reported per exercise, never per muscle
