@@ -13,7 +13,7 @@ history. Exposure to LLMs is a secondary benefit, not the justification, since
 markdown or JSON can be emitted from any store on demand.
 
 Constraint that drives the design: aggregation. Daily macro totals, estimated
-1RM trends, and weekly volume per muscle group all require reading the whole
+1RM trends, and weekly set volume per exercise all require reading the whole
 vault. Parsing every file per query does not scale past a few hundred days on
 device.
 
@@ -62,6 +62,26 @@ in the UI as a pending count, never as a lost entry.
   convention.
 - Reads for anything numeric go to `index.sqlite`, never to the vault.
 
+## Queries
+
+Five numeric queries are in scope for in-app display. They fix the field list:
+every field below either serves one of them or is justified as insurance
+against an irreversible loss.
+
+1. Rolling 7-day average kcal and protein.
+2. Morning bodyweight trend over the last 8 weeks.
+3. Estimated 1RM per exercise, by week.
+4. Weekly set volume per exercise.
+5. Calorie intake against bodyweight change over an arbitrary window.
+
+Volume is reported per exercise, not per muscle group. A muscle-group rollup
+needs a mapping from canonical exercise to muscle group, which is a lookup
+table rather than a logged field, so it can be added later and applied
+retroactively.
+
+Set count and tonnage are both derivable from weight and reps, so choosing
+between them is a presentation decision rather than a capture decision.
+
 ## Interface
 
 Three log actions and nothing else. The home screen is three buttons, one per
@@ -69,32 +89,92 @@ entry type. Each action is a single screen that writes one entry and dismisses.
 
 ### Workout
 
-Fields: exercise, weight (lb), reps.
+| Field | Required | Needed by |
+| --- | --- | --- |
+| exercise | yes | 3, 4 |
+| weight (lb) | yes | 3, 4 |
+| reps | yes | 3, 4 |
+| warmup | defaults to false | 4 |
+| rpe | optional, top set only | 3 |
 
+- One entry per set. Sets are grouped by exercise at write time.
 - Exercise field autocompletes from exercises already in the vault.
 - Weight and reps prefill from the last set logged for that exercise, since
   consecutive sets usually repeat. Logging a second set of the same weight is
   one tap.
-- One entry per set. Sets are grouped by exercise at write time.
 - A session starts from a named template (for example `Push A`) that prefills
   the exercise list, so logging is entering numbers rather than typing names.
   Templates live in the vault and are user-editable.
 
+Warmup sets are recorded but excluded from volume. The flag is not derivable
+after the fact: a light set before a heavy one and a back-off set after it look
+identical, and a percentage-of-top-set rule misreads both back-off sets and
+deload weeks. Left uncaptured, set counts inflate by roughly a third, and
+inconsistently.
+
+RPE is recorded on the top set only. An estimate taken from a set left well
+short of failure reads low, and since query 3 is a trend, a bias that moves
+with daily effort is indistinguishable from a change in strength. Per-set RPE
+adds logging friction without adding signal. Where RPE is absent the estimate
+still stands, but it means "best set performed" rather than a corrected 1RM.
+
+#### Loading Convention
+
+Weight is always the total external load. Dumbbells are summed, so the 40s are
+logged as 80. Bodyweight exercises record added weight only, so an unweighted
+pull-up is 0 and a weighted one is 25.
+
+The convention has to be fixed because the number is otherwise unrecoverable.
+Nothing in `Dumbbell Press: 40x8` says whether 40 was per hand or total. The
+canonical exercise carries its implement type, which tells the parser which
+reading applies. The UI may still display and prefill dumbbells per hand.
+
+Total system load for a bodyweight exercise is added weight plus that day's
+morning bodyweight reading, falling back to the most recent reading when the
+day has none. This needs no extra field, since bodyweight is already logged
+for query 2.
+
 ### Meal
 
-Fields: food, quantity, slot.
+| Field | Required | Needed by |
+| --- | --- | --- |
+| food name | yes | none directly; the human-readable line |
+| food reference | yes | none; insurance |
+| quantity | yes | none directly; audit trail for the macro literals |
+| slot | yes | none; day ordering and the file layout |
+| kcal | yes | 1, 5 |
+| protein | yes | 1 |
+| carbs | yes | none; insurance |
+| fat | yes | none; insurance |
 
 - Slot is a fixed enum: `breakfast`, `lunch`, `dinner`, `snack`. Defaults to
   the slot matching the current hour, and is editable.
 - Food is resolved by text search or barcode scan against `foods.sqlite`.
 - Quantity in grams, or in servings when the entry carries a parseable serving
-  size.
+  size. Grams are always what reaches the file, since servings convert to
+  grams and not the reverse.
 - Macros are computed at log time and written as literals, not recomputed on
   read. Upstream data revisions must not silently change past logs.
 
+The food reference is the source record the line resolved against, written as
+`fdc:<id>` for FoodData Central or `off:<barcode>` for Open Food Facts. Food
+names are not unique in either source, so without it a mistaken entry cannot
+be re-resolved and a saved meal can only name a string. It is a pointer to
+reference data rather than a per-entry ID, so it does not conflict with the
+identity rule below. It lives in the markdown and not only in `index.sqlite`,
+because markdown is authoritative for flushed data and a reindex would
+otherwise drop it.
+
+Carbs and fat serve no query. They are kept because they cost one literal each
+at log time, they are read by hand in the daily frontmatter, and they become
+unrecoverable once the upstream record is revised.
+
 ### Bodyweight
 
-Fields: weight (lb), slot.
+| Field | Required | Needed by |
+| --- | --- | --- |
+| weight (lb) | yes | 2, 5 |
+| slot | yes | 2 |
 
 - Slot is a fixed enum: `morning`, `evening`. Defaults by current hour, and is
   editable.
@@ -102,6 +182,84 @@ Fields: weight (lb), slot.
   whole analytical signal. Clock precision would be noise.
 - One reading per slot per day. A second write to the same slot replaces the
   first.
+- Recorded to 0.1 lb, matching what a scale reports.
+
+## Exercises
+
+An exercise is a record, not a string. A bare name has nowhere to carry the
+implement type that the loading convention depends on, and a name accepted on
+the spot splits the 1RM and volume queries at log time, where no later cleanup
+can separate a typo from a genuinely new movement.
+
+### Exercise Record
+
+| Field | Required | Purpose |
+| --- | --- | --- |
+| canonical name | yes | the name written to session files |
+| implement type | yes | `barbell`, `dumbbell`, `machine`, `cable`, `bodyweight`; fixes which loading convention a number follows |
+| aliases | optional | alternate spellings, resolved at parse time |
+
+Muscle group is deliberately absent. It is a lookup over the canonical name, so
+it can be added later and applied retroactively, and query 4 reports volume per
+exercise rather than per muscle group.
+
+Default sets and reps are absent too. Those belong to the template rather than
+to the exercise.
+
+### Storage
+
+A seed list ships with the app and is copied into the vault on first run. From
+then on the vault file is the only source, and the app both reads and writes it.
+
+`index.sqlite` is the wrong home, since it is declared rebuildable and this data
+cannot be rebuilt from anything upstream. A shipped asset merged with vault
+overrides was rejected on the same grounds as any two-source design: it needs a
+merge rule, and a seed refresh on app update would then fight hand edits.
+
+This makes exercises the second kind of authored data in the vault, alongside
+templates. Unlike templates, the app writes it.
+
+```markdown
+---
+schema: 1
+---
+
+| Exercise | Implement | Aliases |
+| --- | --- | --- |
+| Back Squat | barbell | Squat, Barbell Squat |
+| Romanian Deadlift | barbell | RDL |
+| Pull-up | bodyweight | Pullup, Chin-up |
+| Dumbbell Bench Press | dumbbell | DB Bench |
+```
+
+### Adding an Exercise
+
+Free text alone never creates an exercise. Logging a name the vault does not
+hold requires an explicit create step that asks for the implement type.
+
+The friction is the point. It happens once per exercise ever, and log time is
+the only moment the implement type is reliably known.
+
+### Renaming and Merging
+
+A rename adds an alias and never rewrites history. "Squat", "Back Squat", and
+"Barbell Squat" become three aliases of one record, the queries unify, and the
+files keep saying what was written on the day.
+
+Rewriting files was rejected on two counts. It makes the vault disagree with
+what was actually logged, and a mass rewrite through `NSFileCoordinator` is the
+exact operation most likely to produce conflicted copies.
+
+### Unresolved Exercises
+
+A hand edit in Obsidian can introduce a name the vault does not hold. The
+parser ingests the set as written and flags it unresolved.
+
+- An unresolved set is never auto-promoted to a canonical exercise. That
+  reintroduces the split by another route.
+- An unresolved set is never dropped.
+- Unresolved sets count toward no query until mapped, and surface as a count in
+  the UI the way pending flushes already do.
 
 ## File Layout
 
@@ -112,6 +270,7 @@ structure, so it earns its own file.
 ```
 Daily/2026-09-25.md            food, bodyweight, links to sessions
 Lifts/2026-09-25-push-a.md     one workout session, from a template
+Exercises.md                   exercise records, seeded on first run
 ```
 
 Roughly two files per day, about 700 a year. Rejected alternatives:
@@ -156,6 +315,10 @@ Without times, two identical food entries in one slot are indistinguishable.
 They merge by summing quantity. Two 80g oats at breakfast is 160g oats, which
 is the correct reading regardless.
 
+Identical means the same food reference, not the same name. Two records that
+both read "Chicken breast" are different foods with different macros and must
+not merge.
+
 ### Daily Note
 
 ```markdown
@@ -171,10 +334,10 @@ fat_g: 71
 ## Food
 
 ### Breakfast
-- Oats, 80g — 302 kcal, P11 C54 F5
+- Oats, 80g (fdc:169705) — 302 kcal, P11 C54 F5
 
 ### Lunch
-- Chicken breast, 200g — 330 kcal, P62 C0 F7
+- Chicken breast, 200g (fdc:171477) — 330 kcal, P62 C0 F7
 
 ## Bodyweight
 - morning: 178.4 lb
@@ -199,9 +362,12 @@ date: 2026-09-25
 template: Push A
 ---
 
-- Squat: 225x5, 245x5, 265x5
+- Squat: 135x5w, 225x5, 245x5, 265x5@8
 - RDL: 185x8, 185x8, 185x8
 ```
+
+Each set is `<weight>x<reps>[w][@<rpe>]`, comma-separated in performed order.
+A `w` suffix marks a warmup, and `@` gives the RPE of the set it follows.
 
 Embedded into the daily note with `![[...]]` so the day still reads as a unit
 in Obsidian.
@@ -240,6 +406,8 @@ Required mitigations:
   window to a few writes per day. See Write Path.
 - The app is the only writer for log files. Obsidian is read-only on them by
   convention. Templates are the exception and are read-only to the app.
+- `Exercises.md` is authored data that the app both reads and writes. It is
+  hand-editable, so a hand-added exercise is expected rather than exceptional.
 - A conflicted copy is detected on the next flush and surfaced to the user for
   manual resolution. The app does not attempt an automatic merge.
 
