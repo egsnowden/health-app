@@ -8,25 +8,36 @@ long does a coordinated write take?
 Delete this directory once the finding is recorded on the issue. Nothing here
 is production code.
 
-## Status: not yet run
+## Status: builds clean, not yet run
 
-The source is complete; the findings are not. This machine has Command Line
-Tools only, no Xcode and no iOS SDK, so the app cannot be built or deployed
-from here. Running it needs Xcode, a physical iPhone, Obsidian installed on
-that phone, and a vault syncing through iCloud Drive or Obsidian Sync.
+Verified against Xcode 27.0 and the iOS 27.0 SDK: clean `swiftc -typecheck`,
+and `** BUILD SUCCEEDED **` for `-sdk iphonesimulator`, producing a signed
+`VaultProbe.app`. So the code compiles, links, and bundles.
+
+It has never been *executed*. No iOS simulator runtime is installed and the
+simulator could not answer this question regardless, since it has no Obsidian
+and no real sync. The finding needs a physical iPhone with Obsidian on it and a
+vault syncing through iCloud Drive or Obsidian Sync.
 
 ## Setup
 
-1. Xcode, new project, iOS App, SwiftUI, name it `VaultProbe`.
-2. Delete the generated `VaultProbeApp.swift` and `ContentView.swift`.
-3. Drag in the five `.swift` files from this directory.
-4. Run on a physical device. The simulator is useless here — it has no
-   Obsidian and no real iCloud sync.
+Open `prototype/VaultProbe.xcodeproj`, pick your phone as the destination, Run.
 
-No entitlement and no `Info.plist` key is required. That is itself worth
-confirming, since `requirements.md` claims a free Apple ID is sufficient
-because the vault is reached as a user-picked folder rather than an owned
-iCloud container.
+Two one-time things:
+
+1. Set a signing team. Target → Signing & Capabilities → Team → your Apple ID.
+   Change `PRODUCT_BUNDLE_IDENTIFIER` from `com.example.VaultProbe` if Xcode
+   objects to it.
+2. On the phone: Settings → Privacy & Security → Developer Mode → on, then
+   reboot. Without it the device will not appear as a destination.
+
+The project uses a file-system synchronized group, so adding a `.swift` file to
+`VaultProbe/` picks it up with no project edit.
+
+No entitlement and no `Info.plist` key is required, which the successful build
+already suggests. Worth confirming on device, since `requirements.md` claims a
+free Apple ID is sufficient precisely because the vault is a user-picked folder
+rather than an owned iCloud container.
 
 ## Runs
 
